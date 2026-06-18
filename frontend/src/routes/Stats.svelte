@@ -8,7 +8,7 @@
   let stats = $state(null);
   let decks = $state([]);
   let loading = $state(true);
-  let chartCanvas;
+  let chartCanvas = $state(null);
   let chartInstance = null;
 
   function transformStatsData(rawStats, deckList) {
