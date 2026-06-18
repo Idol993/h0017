@@ -8,11 +8,11 @@
   let csvPreview = $state([]);
   let isDragging = $state(false);
   let importing = $state(false);
-  let jsonFileInput = $state(null);
   let message = $state(null);
   let messageType = $state('success');
 
-  let fileInput = $state(null);
+  let fileInput;
+  let jsonFileInput;
 
   async function loadDecks() {
     try {
@@ -52,7 +52,8 @@
       if (parts.length >= 2) {
         result.push({
           front: parts[0].replace(/^"|"$/g, '').trim(),
-          back: parts[1].replace(/^"|"$/g, '').trim()
+          back: parts[1].replace(/^"|"$/g, '').trim(),
+          tags: parts.length >= 3 ? parts[2].replace(/^"|"$/g, '').trim() : ''
         });
       }
     }
@@ -70,8 +71,7 @@
     csvFile = file;
     const reader = new FileReader();
     reader.onload = (e) => {
-      const text = e.target.result;
-      csvPreview = parseCSV(text);
+      csvPreview = parseCSV(e.target.result);
     };
     reader.readAsText(file);
   }
@@ -79,8 +79,7 @@
   function handleDrop(e) {
     e.preventDefault();
     isDragging = false;
-    const file = e.dataTransfer.files[0];
-    handleFile(file);
+    handleFile(e.dataTransfer.files[0]);
   }
 
   function handleDragOver(e) {
@@ -93,8 +92,7 @@
   }
 
   function handleFileSelect(e) {
-    const file = e.target.files[0];
-    handleFile(file);
+    handleFile(e.target.files[0]);
   }
 
   function triggerFileInput() {
@@ -111,8 +109,8 @@
     try {
       const formData = new FormData();
       formData.append('file', csvFile);
-      await importCSV(selectedDeckId, formData);
-      showMessage('导入成功！', 'success');
+      const result = await importCSV(selectedDeckId, formData);
+      showMessage(`导入成功！新增 ${result.imported} 张卡片，跳过 ${result.skipped} 张重复`, 'success');
       clearCSV();
     } catch (error) {
       console.error('导入失败:', error);
@@ -163,8 +161,8 @@
     try {
       const formData = new FormData();
       formData.append('file', file);
-      await importJSON(formData);
-      showMessage('导入备份成功！', 'success');
+      const result = await importJSON(formData);
+      showMessage(`备份恢复成功！${result.decks_imported} 个卡组，${result.cards_imported} 张卡片，${result.logs_imported} 条复习记录`, 'success');
       loadDecks();
     } catch (error) {
       console.error('导入备份失败:', error);
@@ -178,9 +176,7 @@
   function showMessage(text, type = 'success') {
     message = text;
     messageType = type;
-    setTimeout(() => {
-      message = null;
-    }, 3000);
+    setTimeout(() => { message = null; }, 5000);
   }
 
   onMount(() => {
@@ -192,7 +188,7 @@
   <h1 class="page-title">导入与导出</h1>
 
   {#if message}
-    <div style="padding: 12px 16px; border-radius: 8px; margin-bottom: 24px; color: #ffffff; background-color: {messageType === 'success' ? '#22c55e' : '#ef4444'};">
+    <div class="import-message" class:success={messageType === 'success'} class:error={messageType === 'error'}>
       {message}
     </div>
   {/if}
@@ -201,20 +197,20 @@
     <div class="chart-container">
       <div class="chart-title">导出 JSON 备份</div>
       <p style="color: #6b7280; margin-bottom: 20px; font-size: 14px;">
-        将所有卡组和卡片数据导出为 JSON 格式备份文件，方便迁移和保存。
+        将所有卡组、卡片和复习记录导出为 JSON 文件，方便迁移和保存。
       </p>
       <button class="btn btn-primary" onclick={handleExportJSON} disabled={importing}>
-        📥 导出 JSON 备份
+        导出 JSON 备份
       </button>
     </div>
 
     <div class="chart-container">
       <div class="chart-title">导入 JSON 备份</div>
       <p style="color: #6b7280; margin-bottom: 20px; font-size: 14px;">
-        从之前导出的 JSON 备份文件恢复数据。
+        从之前导出的 JSON 备份恢复数据（会覆盖当前数据）。
       </p>
       <button class="btn btn-secondary" onclick={triggerJSONImport} disabled={importing}>
-        📤 导入 JSON 备份
+        选择 JSON 文件恢复
       </button>
       <input
         type="file"
@@ -229,7 +225,8 @@
   <div class="chart-container">
     <div class="chart-title">导入 CSV 卡片</div>
     <p style="color: #6b7280; margin-bottom: 20px; font-size: 14px;">
-      上传 CSV 文件批量导入卡片。CSV 格式：第一列为正面（问题），第二列为背面（答案）。
+      上传 CSV 文件批量导入卡片。格式：第一列正面，第二列背面，第三列标签（可选，逗号分隔）。
+      正反面完全相同的卡片会自动跳过。
     </p>
 
     <div
@@ -238,10 +235,12 @@
       ondragover={handleDragOver}
       ondragleave={handleDragLeave}
       onclick={triggerFileInput}
+      role="button"
+      tabindex="0"
     >
       <div class="upload-icon">📁</div>
       <div class="upload-text">拖拽 CSV 文件到此处，或点击选择文件</div>
-      <div class="upload-hint">支持 .csv 格式</div>
+      <div class="upload-hint">支持 .csv 格式，编码 UTF-8</div>
       <input
         type="file"
         accept=".csv"
@@ -260,21 +259,23 @@
 
     {#if csvPreview.length > 0}
       <div style="margin-bottom: 24px;">
-        <div style="font-weight: 600; margin-bottom: 12px; color: #374151;">数据预览（前 {Math.min(csvPreview.length - 1, 5)} 条）：</div>
+        <div style="font-weight: 600; margin-bottom: 12px; color: #374151;">数据预览（前 5 条）：</div>
         <table class="preview-table">
           <thead>
             <tr>
               <th>#</th>
               <th>正面（问题）</th>
               <th>背面（答案）</th>
+              <th>标签</th>
             </tr>
           </thead>
           <tbody>
             {#each csvPreview.slice(0, 6) as row, index}
               <tr>
-                <td>{index === 0 ? '表头' : index}</td>
+                <td>{index + 1}</td>
                 <td>{row.front}</td>
                 <td>{row.back}</td>
+                <td>{row.tags}</td>
               </tr>
             {/each}
           </tbody>
@@ -285,8 +286,8 @@
     {#if csvFile}
       <div style="display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;">
         <div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;">
-          <label class="form-label">选择目标卡组</label>
-          <select class="form-select" bind:value={selectedDeckId}>
+          <label class="form-label" for="csv-deck-select">选择目标卡组</label>
+          <select id="csv-deck-select" class="form-select" bind:value={selectedDeckId}>
             <option value="">请选择卡组</option>
             {#each decks as deck}
               <option value={deck.id}>{deck.name}</option>
@@ -294,9 +295,28 @@
           </select>
         </div>
         <button class="btn btn-primary" onclick={handleImportCSV} disabled={importing || !selectedDeckId}>
-          {importing ? '导入中...' : '✓ 确认导入'}
+          {importing ? '导入中...' : '确认导入'}
         </button>
       </div>
     {/if}
   </div>
 </div>
+
+<style>
+  .import-message {
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 24px;
+    font-size: 14px;
+  }
+  .import-message.success {
+    background-color: #f0fdf4;
+    color: #166534;
+    border: 1px solid #bbf7d0;
+  }
+  .import-message.error {
+    background-color: #fef2f2;
+    color: #991b1b;
+    border: 1px solid #fecaca;
+  }
+</style>

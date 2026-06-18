@@ -69,6 +69,12 @@ class ReviewSubmit(BaseModel):
     duration_seconds: int = 0
 
 
+class ReviewSubmitBody(BaseModel):
+    card_id: int
+    rating: int = Field(..., ge=1, le=5)
+    duration_seconds: int = 0
+
+
 class TodayCard(CardWithDeck):
     is_overdue: bool
     overdue_days: int

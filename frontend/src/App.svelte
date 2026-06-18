@@ -7,7 +7,7 @@
 
   let currentRoute = $state('today');
 
-  const routes = {
+  const routeMap = {
     today: Today,
     decks: Decks,
     stats: Stats,
@@ -28,15 +28,17 @@
 
   onMount(() => {
     const hash = window.location.hash.slice(1);
-    if (hash && routes[hash]) {
+    if (hash && routeMap[hash]) {
       currentRoute = hash;
     }
-    window.addEventListener('popstate', () => {
+    const handlePop = () => {
       const newHash = window.location.hash.slice(1);
-      if (newHash && routes[newHash]) {
+      if (newHash && routeMap[newHash]) {
         currentRoute = newHash;
       }
-    });
+    };
+    window.addEventListener('popstate', handlePop);
+    return () => window.removeEventListener('popstate', handlePop);
   });
 </script>
 
@@ -46,7 +48,8 @@
     <div class="nav-links">
       {#each navItems as item}
         <button
-          class={currentRoute === item.id ? 'nav-link active' : 'nav-link'}
+          class="nav-link"
+          class:active={currentRoute === item.id}
           onclick={() => navigate(item.id)}
         >
           {item.label}

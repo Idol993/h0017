@@ -9,16 +9,16 @@ def calculate_next_interval(card, rating: int) -> dict:
     if rating == 1:
         new_interval = 1
         new_consecutive = 0
-        new_strength = max(1.3, strength - 0.2)
+        new_strength = max(1.3, round(strength - 0.2, 2))
     elif rating == 2:
         new_interval = 1
         new_consecutive = 0
-        new_strength = max(1.3, strength - 0.1)
+        new_strength = max(1.3, round(strength - 0.1, 2))
     elif rating == 3:
         if consecutive == 0:
             new_interval = 1
         else:
-            new_interval = max(1, int(prev_interval * 0.8))
+            new_interval = max(1, int(prev_interval * 0.9))
         new_consecutive = consecutive
         new_strength = strength
     elif rating == 4:
@@ -28,8 +28,9 @@ def calculate_next_interval(card, rating: int) -> dict:
         elif new_consecutive == 2:
             new_interval = 6
         else:
-            new_interval = int(prev_interval * strength * 0.8)
-        new_strength = min(3.0, strength + 0.05)
+            multiplier = 1.3 + (strength - 1.3) / (3.0 - 1.3) * 0.4
+            new_interval = max(1, int(prev_interval * multiplier))
+        new_strength = min(3.0, round(strength + 0.05, 2))
     elif rating == 5:
         new_consecutive = consecutive + 1
         if new_consecutive == 1:
@@ -37,8 +38,9 @@ def calculate_next_interval(card, rating: int) -> dict:
         elif new_consecutive == 2:
             new_interval = 6
         else:
-            new_interval = int(prev_interval * strength)
-        new_strength = min(3.0, strength + 0.1)
+            multiplier = 1.5 + (strength - 1.3) / (3.0 - 1.3) * 0.5
+            new_interval = max(1, int(prev_interval * multiplier))
+        new_strength = min(3.0, round(strength + 0.1, 2))
     else:
         raise ValueError("Rating must be between 1 and 5")
 

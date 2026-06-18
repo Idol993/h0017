@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List
 from collections import defaultdict
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -14,7 +14,7 @@ from models import Deck, Card, ReviewLog
 from schemas import (
     DeckCreate, DeckResponse, DeckUpdate,
     CardCreate, CardResponse, CardUpdate, CardWithDeck,
-    ReviewSubmit, TodayCard, Stats, DeckStats
+    ReviewSubmit, ReviewSubmitBody, TodayCard, Stats, DeckStats
 )
 from sm2 import calculate_next_interval
 
@@ -33,8 +33,7 @@ app.add_middleware(
 
 @app.get("/api/decks", response_model=List[DeckResponse])
 def list_decks(db: Session = Depends(get_db)):
-    decks = db.query(Deck).all()
-    return decks
+    return db.query(Deck).all()
 
 
 @app.post("/api/decks", response_model=DeckResponse)
@@ -69,7 +68,7 @@ def delete_deck(deck_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/cards", response_model=List[CardResponse])
-def list_cards(deck_id: Optional[int] = None, db: Session = Depends(get_db)):
+def list_cards(deck_id: Optional[int] = Query(None), db: Session = Depends(get_db)):
     query = db.query(Card)
     if deck_id is not None:
         query = query.filter(Card.deck_id == deck_id)
@@ -113,16 +112,17 @@ def delete_card(card_id: int, db: Session = Depends(get_db)):
 @app.get("/api/today", response_model=List[TodayCard])
 def get_today_cards(db: Session = Depends(get_db)):
     now = datetime.now()
-    today_end = datetime(now.year, now.month, now.day) + timedelta(days=1)
+    today_start = datetime(now.year, now.month, now.day)
+    today_end = today_start + timedelta(days=1)
 
     cards = db.query(Card).filter(Card.next_review <= today_end).all()
 
     result = []
     for card in cards:
-        is_overdue = card.next_review < datetime(now.year, now.month, now.day)
+        is_overdue = card.next_review < today_start
         overdue_days = 0
         if is_overdue:
-            overdue_days = (datetime(now.year, now.month, now.day) - card.next_review).days
+            overdue_days = (today_start - card.next_review).days
 
         result.append(TodayCard(
             id=card.id,
@@ -143,13 +143,13 @@ def get_today_cards(db: Session = Depends(get_db)):
             overdue_days=overdue_days,
         ))
 
-    result.sort(key=lambda x: (not x.is_overdue, -x.overdue_days, x.deck_id))
+    result.sort(key=lambda x: (x.is_overdue, -x.overdue_days, x.deck_id))
 
     return result
 
 
 @app.post("/api/review/{card_id}", response_model=CardResponse)
-def submit_review(card_id: int, review_data: ReviewSubmit, db: Session = Depends(get_db)):
+def submit_review_path(card_id: int, review_data: ReviewSubmit, db: Session = Depends(get_db)):
     card = db.query(Card).filter(Card.id == card_id).first()
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
@@ -171,8 +171,31 @@ def submit_review(card_id: int, review_data: ReviewSubmit, db: Session = Depends
     return card
 
 
+@app.post("/api/review", response_model=CardResponse)
+def submit_review_body(review_data: ReviewSubmitBody, db: Session = Depends(get_db)):
+    card = db.query(Card).filter(Card.id == review_data.card_id).first()
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    updates = calculate_next_interval(card, review_data.rating)
+
+    for key, value in updates.items():
+        setattr(card, key, value)
+
+    log = ReviewLog(
+        card_id=card.id,
+        rating=review_data.rating,
+        duration_seconds=review_data.duration_seconds,
+        reviewed_at=datetime.now(),
+    )
+    db.add(log)
+    db.commit()
+    db.refresh(card)
+    return card
+
+
 @app.post("/api/import/csv")
-async def import_csv(deck_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def import_csv(deck_id: int = Query(...), file: UploadFile = File(...), db: Session = Depends(get_db)):
     deck = db.query(Deck).filter(Deck.id == deck_id).first()
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")
