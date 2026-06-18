@@ -340,49 +340,183 @@ def export_json(db: Session = Depends(get_db)):
 
 @app.post("/api/import/json")
 async def import_json(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    content = await file.read()
-    data = json.loads(content)
+    try:
+        content = await file.read()
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"JSON 格式错误: {str(e)}")
 
-    db.query(ReviewLog).delete()
-    db.query(Card).delete()
-    db.query(Deck).delete()
-    db.commit()
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=400, detail="JSON 格式错误：根节点必须是对象")
 
-    deck_id_map = {}
-    for deck_data in data.get("decks", []):
-        old_id = deck_data.pop("id")
-        deck = Deck(**deck_data)
-        db.add(deck)
-        db.flush()
-        deck_id_map[old_id] = deck.id
+        for key in ["decks", "cards", "review_logs"]:
+            if key not in data:
+                data[key] = []
+            elif not isinstance(data[key], list):
+                raise HTTPException(status_code=400, detail=f"JSON 格式错误：'{key}' 必须是数组")
 
-    card_id_map = {}
-    for card_data in data.get("cards", []):
-        old_id = card_data.pop("id")
-        old_deck_id = card_data.get("deck_id")
-        if old_deck_id in deck_id_map:
-            card_data["deck_id"] = deck_id_map[old_deck_id]
-        for field in ["last_reviewed", "next_review", "created_at"]:
-            if card_data.get(field):
-                card_data[field] = datetime.fromisoformat(card_data[field])
-        card = Card(**card_data)
-        db.add(card)
-        db.flush()
-        card_id_map[old_id] = card.id
+        decks_imported = 0
+        decks_updated = 0
+        cards_imported = 0
+        cards_updated = 0
+        logs_imported = 0
+        logs_skipped = 0
 
-    for log_data in data.get("review_logs", []):
-        log_data.pop("id", None)
-        old_card_id = log_data.get("card_id")
-        if old_card_id in card_id_map:
-            log_data["card_id"] = card_id_map[old_card_id]
-        if log_data.get("reviewed_at"):
-            log_data["reviewed_at"] = datetime.fromisoformat(log_data["reviewed_at"])
-        log = ReviewLog(**log_data)
-        db.add(log)
+        deck_id_map = {}
+        existing_decks_by_name = {d.name: d for d in db.query(Deck).all()}
 
-    db.commit()
-    return {
-        "decks_imported": len(deck_id_map),
-        "cards_imported": len(card_id_map),
-        "logs_imported": len(data.get("review_logs", [])),
-    }
+        for deck_data in data.get("decks", []):
+            if not isinstance(deck_data, dict) or "name" not in deck_data:
+                continue
+            old_id = deck_data.get("id")
+            name = deck_data.get("name", "").strip()
+            if not name:
+                continue
+
+            if name in existing_decks_by_name:
+                deck = existing_decks_by_name[name]
+                if deck_data.get("language_pair"):
+                    deck.language_pair = deck_data["language_pair"]
+                if deck_data.get("cover_color"):
+                    deck.cover_color = deck_data["cover_color"]
+                decks_updated += 1
+            else:
+                deck = Deck(
+                    name=name,
+                    language_pair=deck_data.get("language_pair", "zh-jp"),
+                    cover_color=deck_data.get("cover_color", "#3b82f6"),
+                )
+                db.add(deck)
+                db.flush()
+                existing_decks_by_name[name] = deck
+                decks_imported += 1
+            deck_id_map[old_id] = deck.id
+
+        card_id_map = {}
+        existing_cards_by_key = {}
+        for c in db.query(Card).all():
+            key = (c.deck_id, (c.front or "").strip(), (c.back or "").strip())
+            existing_cards_by_key[key] = c
+
+        for card_data in data.get("cards", []):
+            if not isinstance(card_data, dict):
+                continue
+            old_id = card_data.get("id")
+            old_deck_id = card_data.get("deck_id")
+            new_deck_id = deck_id_map.get(old_deck_id)
+            if not new_deck_id:
+                continue
+
+            front = (card_data.get("front") or "").strip()
+            back = (card_data.get("back") or "").strip()
+            if not front or not back:
+                continue
+
+            key = (new_deck_id, front, back)
+
+            if key in existing_cards_by_key:
+                card = existing_cards_by_key[key]
+                if card_data.get("image_url"):
+                    card.image_url = card_data["image_url"]
+                if card_data.get("tags") is not None:
+                    card.tags = card_data["tags"] or []
+                if card_data.get("last_reviewed"):
+                    try:
+                        card.last_reviewed = datetime.fromisoformat(card_data["last_reviewed"])
+                    except (ValueError, TypeError):
+                        pass
+                if card_data.get("next_review"):
+                    try:
+                        card.next_review = datetime.fromisoformat(card_data["next_review"])
+                    except (ValueError, TypeError):
+                        pass
+                if card_data.get("memory_strength") is not None:
+                    card.memory_strength = card_data["memory_strength"]
+                if card_data.get("consecutive_correct") is not None:
+                    card.consecutive_correct = card_data["consecutive_correct"]
+                if card_data.get("interval_days") is not None:
+                    card.interval_days = card_data["interval_days"]
+                cards_updated += 1
+            else:
+                create_data = {
+                    "deck_id": new_deck_id,
+                    "front": front,
+                    "back": back,
+                    "image_url": card_data.get("image_url"),
+                    "tags": card_data.get("tags") or [],
+                    "memory_strength": card_data.get("memory_strength", 2.5),
+                    "consecutive_correct": card_data.get("consecutive_correct", 0),
+                    "interval_days": card_data.get("interval_days", 0),
+                }
+                if card_data.get("last_reviewed"):
+                    try:
+                        create_data["last_reviewed"] = datetime.fromisoformat(card_data["last_reviewed"])
+                    except (ValueError, TypeError):
+                        pass
+                if card_data.get("next_review"):
+                    try:
+                        create_data["next_review"] = datetime.fromisoformat(card_data["next_review"])
+                    except (ValueError, TypeError):
+                        create_data["next_review"] = datetime.now()
+                else:
+                    create_data["next_review"] = datetime.now()
+
+                card = Card(**create_data)
+                db.add(card)
+                db.flush()
+                existing_cards_by_key[key] = card
+                cards_imported += 1
+            card_id_map[old_id] = card.id
+
+        existing_log_keys = set()
+        for l in db.query(ReviewLog).all():
+            ts = l.reviewed_at.replace(microsecond=0) if l.reviewed_at else None
+            existing_log_keys.add((l.card_id, ts, l.rating))
+
+        for log_data in data.get("review_logs", []):
+            if not isinstance(log_data, dict):
+                continue
+            old_card_id = log_data.get("card_id")
+            new_card_id = card_id_map.get(old_card_id)
+            if not new_card_id:
+                continue
+
+            rating = log_data.get("rating")
+            if rating is None:
+                continue
+
+            try:
+                reviewed_at = datetime.fromisoformat(log_data["reviewed_at"]).replace(microsecond=0) if log_data.get("reviewed_at") else datetime.now()
+            except (ValueError, TypeError):
+                reviewed_at = datetime.now().replace(microsecond=0)
+
+            log_key = (new_card_id, reviewed_at, rating)
+            if log_key in existing_log_keys:
+                logs_skipped += 1
+                continue
+
+            log = ReviewLog(
+                card_id=new_card_id,
+                rating=rating,
+                duration_seconds=log_data.get("duration_seconds", 0),
+                reviewed_at=reviewed_at,
+            )
+            db.add(log)
+            existing_log_keys.add(log_key)
+            logs_imported += 1
+
+        db.commit()
+        return {
+            "decks_imported": decks_imported,
+            "decks_updated": decks_updated,
+            "cards_imported": cards_imported,
+            "cards_updated": cards_updated,
+            "logs_imported": logs_imported,
+            "logs_skipped": logs_skipped,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"导入失败：{str(e)}")

@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class DeckCreate(BaseModel):
@@ -54,6 +54,13 @@ class CardResponse(BaseModel):
     consecutive_correct: int
     interval_days: int
     created_at: datetime
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def fix_tags(cls, v):
+        if v is None:
+            return []
+        return v
 
     class Config:
         from_attributes = True

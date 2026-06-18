@@ -162,11 +162,22 @@
       const formData = new FormData();
       formData.append('file', file);
       const result = await importJSON(formData);
-      showMessage(`备份恢复成功！${result.decks_imported} 个卡组，${result.cards_imported} 张卡片，${result.logs_imported} 条复习记录`, 'success');
+      const parts = [];
+      if (result.decks_imported || result.decks_updated) {
+        parts.push(`${result.decks_imported || 0} 个卡组新增，${result.decks_updated || 0} 个更新`);
+      }
+      if (result.cards_imported || result.cards_updated) {
+        parts.push(`${result.cards_imported || 0} 张卡片新增，${result.cards_updated || 0} 张更新复习进度`);
+      }
+      if (result.logs_imported || result.logs_skipped) {
+        parts.push(`${result.logs_imported || 0} 条复习记录恢复，${result.logs_skipped || 0} 条跳过`);
+      }
+      showMessage(`备份恢复成功！${parts.join('；')}`, 'success');
       loadDecks();
     } catch (error) {
       console.error('导入备份失败:', error);
-      showMessage('导入备份失败，请重试', 'error');
+      const detail = error?.response?.data?.detail || error?.message || '未知错误';
+      showMessage(`导入备份失败：${detail}`, 'error');
     } finally {
       importing = false;
       if (jsonFileInput) jsonFileInput.value = '';
